@@ -1,0 +1,20 @@
+{
+  "plugin.id": "np.stockTicker",
+  "plugin.name": "Stock Ticker",
+  "plugin.description": "Created by MCP: Stock Ticker",
+  "plugin.author": "MCP",
+  "plugin.version": "1.0.0",
+  "plugin.script": "script.js",
+  "plugin.icon": "puzzle-piece",
+  "plugin.commands": [
+    {
+      "name": "Stock Ticker",
+      "description": "Stock Ticker",
+      "jsFunction": "StockTicker",
+      "sidebarView": {
+        "title": "Stock Ticker",
+        "icon": "puzzle-piece"
+      }
+    }
+  ]
+}
