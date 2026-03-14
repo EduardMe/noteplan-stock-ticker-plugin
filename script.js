@@ -4,6 +4,7 @@ globalThis.StockTicker = async function() {
 <html>
 <head>
 <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   html, body { height: 100%; }
@@ -130,6 +131,17 @@ globalThis.StockTicker = async function() {
   .status-dot.closed { background: var(--subtext); }
   @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
   .loading { text-align: center; padding: 60px; color: var(--subtext); font-size: 14px; }
+
+  @media (max-width: 500px) {
+    body { padding: 10px; }
+    .header h1 { font-size: 16px; }
+    .detail-layout { flex-direction: column; }
+    .detail-sidebar { width: 100%; }
+    .detail-price { font-size: 24px; }
+    .detail-chart { min-height: 150px; }
+    .stock-input { width: 120px; }
+    .chip { padding: 4px 10px; font-size: 10px; }
+  }
   .debug { font-size: 11px; color: var(--subtext); margin-top: 12px; padding: 12px; background: var(--header-bg); border-radius: 8px; font-family: monospace; white-space: pre-wrap; word-break: break-all; display: none; }
   .debug.show { display: block; }
 </style>
