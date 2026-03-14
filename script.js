@@ -23,7 +23,7 @@ globalThis.StockTicker = async function() {
     margin-bottom: 10px; border: 1px solid var(--card-border);
   }
   .header h1 { font-size: 18px; font-weight: 700; }
-  .header .subtitle { font-size: 11px; color: var(--subtext); margin-top: 2px; }
+  .header .subtitle { font-size: 11px; color: var(--subtext); margin-top: 2px; display: flex; align-items: center; }
   .refresh-btn {
     background: none; border: 1px solid var(--card-border); color: inherit;
     padding: 6px 14px; border-radius: 8px; cursor: pointer; font-size: 12px;
@@ -59,11 +59,16 @@ globalThis.StockTicker = async function() {
   .search-item .si-exchange { color: var(--subtext); font-size: 10px; margin-left: 8px; flex-shrink: 0; }
   .search-loading { padding: 10px 12px; font-size: 11px; color: var(--subtext); }
   .search-empty { padding: 10px 12px; font-size: 11px; color: var(--subtext); }
+  .chip { position: relative; }
   .chip .remove-btn {
-    display: none; margin-left: 2px; font-size: 14px; line-height: 1;
-    cursor: pointer; opacity: 0.5; padding: 0 2px;
+    position: absolute; top: -8px; right: -6px;
+    width: 16px; height: 16px; font-size: 11px;
+    display: flex; align-items: center; justify-content: center;
+    padding-bottom: 1px; cursor: pointer;
+    background: var(--subtext); color: var(--card-bg); border-radius: 50%;
+    opacity: 0; pointer-events: none; transition: opacity 0.15s;
   }
-  .chip:hover .remove-btn { display: inline; }
+  .chip:hover .remove-btn { opacity: 0.85; pointer-events: auto; }
   .chip .remove-btn:hover { opacity: 1; }
 
   .toolbar { display: flex; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; align-items: center; }
@@ -135,7 +140,6 @@ globalThis.StockTicker = async function() {
     
     <div class="subtitle" id="status"><span class="status-dot closed"></span>Loading...</div>
   </div>
-  <button class="refresh-btn" onclick="fetchAllStocks()">Refresh</button>
 </div>
 <div class="toolbar">
   <div id="chips" class="chips"></div>
@@ -597,13 +601,9 @@ function renderDetail() {
   var stock = allStockData.find(function(s) { return s.symbol === selectedSymbol; });
   if (!stock) return;
   var info = STOCKS.find(function(s) { return s.symbol === stock.symbol; }) || { symbol: stock.symbol, name: stock.symbol };
-  var prevClose = stock.prevClose || stock.price;
-  var change = stock.price - prevClose;
-  var changePct = prevClose ? (change / prevClose * 100) : 0;
-  var isPos = change >= 0;
-  var sign = isPos ? '+' : '';
+  var dayPrevClose = stock.prevClose || stock.price;
 
-  // Determine chart data
+  // Determine chart data based on selected range
   var chartData, chartTimestamps, chartPrevClose;
   var cacheKey = selectedSymbol + ':' + selectedRange;
   if (selectedRange !== '1d' && rangeChartData[cacheKey]) {
@@ -613,8 +613,23 @@ function renderDetail() {
   } else {
     chartData = stock.sparkData;
     chartTimestamps = stock.timestamps;
-    chartPrevClose = prevClose;
+    chartPrevClose = dayPrevClose;
   }
+
+  // Compute change based on selected range
+  var filteredForChange = chartData ? chartData.filter(function(c) { return c !== null; }) : [];
+  var rangeStartPrice, change, changePct;
+  if (selectedRange === '1d') {
+    rangeStartPrice = dayPrevClose;
+  } else if (filteredForChange.length > 0) {
+    rangeStartPrice = filteredForChange[0];
+  } else {
+    rangeStartPrice = dayPrevClose;
+  }
+  change = stock.price - rangeStartPrice;
+  changePct = rangeStartPrice ? (change / rangeStartPrice * 100) : 0;
+  var isPos = change >= 0;
+  var sign = isPos ? '+' : '';
 
   var now = new Date();
   var dateStr = now.toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric' }) + ', ' +
@@ -645,7 +660,7 @@ function renderDetail() {
     '<div class="detail-sidebar">' +
       '<div class="sidebar-title">Market Data</div>' +
       '<table class="sidebar-table">' +
-        '<tr><td>Prev Close</td><td>' + formatPrice(prevClose) + '</td></tr>' +
+        '<tr><td>Prev Close</td><td>' + formatPrice(dayPrevClose) + '</td></tr>' +
         '<tr><td>Open</td><td>' + formatPrice(stock.open || stock.price) + '</td></tr>' +
         '<tr><td>Day High</td><td>' + formatPrice(stock.high || stock.price) + '</td></tr>' +
         '<tr><td>Day Low</td><td>' + formatPrice(stock.low || stock.price) + '</td></tr>' +
@@ -744,11 +759,95 @@ function renderPlaceholder() {
   '</div>';
 }
 
+// --- NotePlan Theme Integration ---
+function hexToRgb(hex) {
+  hex = hex.replace(/^#/, '');
+  if (hex.length === 8) hex = hex.slice(2); // strip alpha prefix like #FF112233 -> 112233
+  if (hex.length === 3) hex = hex[0]+hex[0]+hex[1]+hex[1]+hex[2]+hex[2];
+  var n = parseInt(hex, 16);
+  return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 };
+}
+
+function blendColor(hex1, hex2, t) {
+  var c1 = hexToRgb(hex1), c2 = hexToRgb(hex2);
+  var r = Math.round(c1.r + (c2.r - c1.r) * t);
+  var g = Math.round(c1.g + (c2.g - c1.g) * t);
+  var b = Math.round(c1.b + (c2.b - c1.b) * t);
+  return '#' + ((1<<24)+(r<<16)+(g<<8)+b).toString(16).slice(1);
+}
+
+async function applyNotePlanTheme() {
+  try {
+    if (typeof Editor === 'undefined') return false;
+    var theme = await Editor.currentTheme;
+    if (!theme) return false;
+    var values = theme.values || theme;
+    var ed = values.editor;
+    if (!ed || !ed.backgroundColor || !ed.textColor) return false;
+
+    var isDark = (values.style === 'Dark') || (theme.mode === 'dark');
+    var bg = ed.backgroundColor;
+    var text = ed.textColor;
+    var altBg = ed.altBackgroundColor || blendColor(bg, isDark ? '#ffffff' : '#000000', 0.05);
+    var tint = ed.tintColor || (isDark ? '#00c853' : '#2d8a4e');
+    var rgb = hexToRgb(text);
+
+    // Derive all CSS variables from theme
+    var cardBg = altBg;
+    var cardBorder = blendColor(bg, isDark ? '#ffffff' : '#000000', isDark ? 0.12 : 0.08);
+    var subtext = blendColor(text, bg, 0.45);
+    var headerBg = blendColor(bg, isDark ? '#000000' : '#ffffff', isDark ? 0.25 : 0.08);
+    var hoverBg = blendColor(bg, isDark ? '#ffffff' : '#000000', 0.06);
+    var positive = isDark ? '#00c853' : '#2d8a4e';
+    var negative = isDark ? '#ff5252' : '#b71c1c';
+    var posRgb = hexToRgb(positive);
+    var negRgb = hexToRgb(negative);
+
+    var vars = {
+      'background': bg,
+      'color': text,
+      '--card-bg': cardBg,
+      '--card-border': cardBorder,
+      '--subtext': subtext,
+      '--positive': positive,
+      '--negative': negative,
+      '--header-bg': headerBg,
+      '--pos-bg': 'rgba(' + posRgb.r + ',' + posRgb.g + ',' + posRgb.b + ',0.08)',
+      '--neg-bg': 'rgba(' + negRgb.r + ',' + negRgb.g + ',' + negRgb.b + ',0.08)',
+      '--chip-active': text,
+      '--chip-active-text': bg,
+      '--chip-bg': cardBg,
+      '--hover-bg': hoverBg,
+      '--prev-line': 'rgba(' + rgb.r + ',' + rgb.g + ',' + rgb.b + ',0.2)',
+      '--axis-color': subtext,
+      '--table-alt': 'rgba(' + rgb.r + ',' + rgb.g + ',' + rgb.b + ',0.03)',
+      '--range-active-bg': text,
+      '--range-active-text': bg
+    };
+
+    var body = document.body;
+    for (var key in vars) {
+      if (key === 'background' || key === 'color') {
+        body.style[key] = vars[key];
+      } else {
+        body.style.setProperty(key, vars[key]);
+      }
+    }
+    log('Applied NotePlan theme: ' + (values.name || theme.name || 'unknown') + ' (' + (isDark ? 'dark' : 'light') + ')');
+    return true;
+  } catch(e) {
+    log('Theme API not available, using fallback: ' + e.message);
+    return false;
+  }
+}
+
+applyNotePlanTheme();
+
 renderPlaceholder();
 fetchAllStocks();
 setInterval(fetchAllStocks, 120000);
 </script>
 </body>
 </html>`;
-  await HTMLView.showInMainWindow(html, "Stock Ticker", { id: "main:np.stockTicker:Stock Ticker" });
+  await HTMLView.showInMainWindow(html, "\ud83d\udcc8 Stock Ticker", {"id":"main:np.stockTicker:\ud83d\udcc8 Stock Ticker","icon":"chart-line"});
 };

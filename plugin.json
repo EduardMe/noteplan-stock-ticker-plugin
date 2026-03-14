@@ -1,20 +1,21 @@
 {
   "plugin.id": "np.stockTicker",
-  "plugin.name": "Stock Ticker",
-  "plugin.description": "Created by MCP: Stock Ticker",
-  "plugin.author": "MCP",
+  "plugin.name": "📈 Stock Ticker",
+  "plugin.description": "Live stock portfolio tracker with real-time quotes and daily performance",
+  "plugin.author": "Eduard Metzger",
   "plugin.version": "1.0.0",
   "plugin.script": "script.js",
-  "plugin.icon": "puzzle-piece",
+  "plugin.icon": "chart-line",
   "plugin.commands": [
     {
       "name": "Stock Ticker",
-      "description": "Stock Ticker",
+      "description": "Live stock portfolio tracker with real-time quotes and daily performance",
       "jsFunction": "StockTicker",
       "sidebarView": {
         "title": "Stock Ticker",
-        "icon": "puzzle-piece"
+        "icon": "chart-line"
       }
     }
-  ]
+  ],
+  "plugin.url": "https://github.com/EduardMe/noteplan-stock-ticker-plugin"
 }
