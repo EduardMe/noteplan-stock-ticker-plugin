@@ -849,5 +849,5 @@ setInterval(fetchAllStocks, 120000);
 </script>
 </body>
 </html>`;
-  await HTMLView.showInMainWindow(html, "\ud83d\udcc8 Stock Ticker", {"id":"main:np.stockTicker:\ud83d\udcc8 Stock Ticker","icon":"chart-line"});
+  await HTMLView.showInMainWindow(html, "Stock Ticker", {"id":"main:np.stockTicker:Stock Ticker","icon":"chart-line"});
 };
