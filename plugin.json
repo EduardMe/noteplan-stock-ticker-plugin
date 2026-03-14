@@ -14,7 +14,7 @@
   ],
   "plugin.description" : "Live stock portfolio tracker with real-time quotes and daily performance",
   "plugin.id" : "np.stockTicker",
-  "plugin.version" : "1.0.0",
+  "plugin.version" : "1.0.1",
   "plugin.url" : "https:\/\/github.com\/EduardMe\/noteplan-stock-ticker-plugin",
   "plugin.icon" : "chart-line",
   "plugin.author" : "Eduard Metzger",
