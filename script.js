@@ -1,4 +1,4 @@
-// Auto-generated shim for backward compatibility with NotePlan < 3.22
+// Auto-generated shim for backward compatibility with NotePlan < 3.21
 // Do not edit — modify index.html instead
 globalThis.StockTicker = async function() {
   const html = `<!DOCTYPE html>
