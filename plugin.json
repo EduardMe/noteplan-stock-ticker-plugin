@@ -1,22 +1,25 @@
 {
-  "plugin.script" : "script.js",
-  "plugin.isCommunity" : true,
-  "plugin.commands" : [
+  "plugin.id": "np.stockTicker",
+  "plugin.name": "📈 Stock Ticker",
+  "plugin.description": "Live stock portfolio tracker with real-time quotes and daily performance",
+  "plugin.author": "Eduard Metzger",
+  "plugin.version": "1.0.2",
+  "plugin.url": "https://github.com/EduardMe/noteplan-stock-ticker-plugin",
+  "plugin.icon": "chart-line",
+  "plugin.type": "html",
+  "plugin.html": "index.html",
+  "plugin.sidebarTitle": "Stock Ticker",
+  "plugin.sidebarView": true,
+  "plugin.script": "script.js",
+  "plugin.commands": [
     {
-      "sidebarView" : {
-        "title" : "Stock Ticker",
-        "icon" : "chart-line"
-      },
-      "name" : "Stock Ticker",
-      "description" : "Live stock portfolio tracker with real-time quotes and daily performance",
-      "jsFunction" : "StockTicker"
+      "name": "Stock Ticker",
+      "description": "Live stock portfolio tracker with real-time quotes and daily performance",
+      "jsFunction": "StockTicker",
+      "sidebarView": {
+        "title": "Stock Ticker",
+        "icon": "chart-line"
+      }
     }
-  ],
-  "plugin.description" : "Live stock portfolio tracker with real-time quotes and daily performance",
-  "plugin.id" : "np.stockTicker",
-  "plugin.version" : "1.0.1",
-  "plugin.url" : "https:\/\/github.com\/EduardMe\/noteplan-stock-ticker-plugin",
-  "plugin.icon" : "chart-line",
-  "plugin.author" : "Eduard Metzger",
-  "plugin.name" : "📈 Stock Ticker"
+  ]
 }

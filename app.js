@@ -1,0 +1,694 @@
+var DEFAULT_SYMBOLS = ['AAPL', 'MSFT', 'GOOGL'];
+var STOCKS = [];
+
+function loadPortfolio() {
+  try {
+    var saved = localStorage.getItem('np_stock_portfolio');
+    if (saved) return JSON.parse(saved);
+  } catch(e) {}
+  return DEFAULT_SYMBOLS.slice();
+}
+
+function savePortfolio(symbols) {
+  try { localStorage.setItem('np_stock_portfolio', JSON.stringify(symbols)); } catch(e) {}
+}
+
+function rebuildStocks(symbols) {
+  STOCKS = symbols.map(function(sym) {
+    return { symbol: sym.toUpperCase(), name: sym.toUpperCase(), pe: null, mktCap: null, divYield: null, eps: null, sector: null };
+  });
+}
+
+var portfolioSymbols = loadPortfolio();
+rebuildStocks(portfolioSymbols);
+
+var searchTimer = null;
+var searchResults = [];
+var searchHighlight = -1;
+
+function onSearchInput() {
+  var input = document.getElementById('addStockInput');
+  var query = (input.value || '').trim();
+  if (searchTimer) clearTimeout(searchTimer);
+  if (query.length < 1) {
+    hideDropdown();
+    return;
+  }
+  searchTimer = setTimeout(function() { doSearch(query); }, 250);
+}
+
+function onSearchKeydown(e) {
+  var dd = document.getElementById('searchDropdown');
+  if (!dd.classList.contains('show')) {
+    if (e.key === 'Escape') { document.getElementById('addStockInput').blur(); }
+    return;
+  }
+  if (e.key === 'ArrowDown') {
+    e.preventDefault();
+    searchHighlight = Math.min(searchHighlight + 1, searchResults.length - 1);
+    renderDropdown();
+  } else if (e.key === 'ArrowUp') {
+    e.preventDefault();
+    searchHighlight = Math.max(searchHighlight - 1, 0);
+    renderDropdown();
+  } else if (e.key === 'Enter') {
+    e.preventDefault();
+    if (searchHighlight >= 0 && searchResults[searchHighlight]) {
+      pickResult(searchResults[searchHighlight].symbol);
+    }
+  } else if (e.key === 'Escape') {
+    hideDropdown();
+  }
+}
+
+async function doSearch(query) {
+  var dd = document.getElementById('searchDropdown');
+  dd.innerHTML = '<div class="search-loading">Searching...</div>';
+  dd.classList.add('show');
+  try {
+    var url = 'https://query1.finance.yahoo.com/v1/finance/search?q=' + encodeURIComponent(query) + '&quotesCount=6&newsCount=0&listsCount=0';
+    var resp = await fetch(url);
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+    var json = await resp.json();
+    searchResults = (json.quotes || []).filter(function(q) {
+      return q.quoteType === 'EQUITY' || q.quoteType === 'ETF';
+    }).slice(0, 6);
+    searchHighlight = searchResults.length > 0 ? 0 : -1;
+    renderDropdown();
+  } catch(e) {
+    log('Search failed: ' + e.message);
+    dd.innerHTML = '<div class="search-empty">Search unavailable</div>';
+  }
+}
+
+function renderDropdown() {
+  var dd = document.getElementById('searchDropdown');
+  if (searchResults.length === 0) {
+    dd.innerHTML = '<div class="search-empty">No results found</div>';
+    return;
+  }
+  var html = '';
+  searchResults.forEach(function(r, i) {
+    var already = portfolioSymbols.indexOf(r.symbol) !== -1;
+    var hl = i === searchHighlight ? 'background:var(--hover-bg);' : '';
+    html += '<div class="search-item" style="' + hl + '" onclick="pickResult(\'' + r.symbol + '\')">' +
+      '<span class="si-symbol">' + r.symbol + (already ? ' ✓' : '') + '</span>' +
+      '<span class="si-name">' + (r.shortname || r.longname || '') + '</span>' +
+      '<span class="si-exchange">' + (r.exchDisp || r.exchange || '') + '</span>' +
+    '</div>';
+  });
+  dd.innerHTML = html;
+  dd.classList.add('show');
+}
+
+function hideDropdown() {
+  var dd = document.getElementById('searchDropdown');
+  dd.classList.remove('show');
+  searchResults = [];
+  searchHighlight = -1;
+}
+
+async function pickResult(sym) {
+  var input = document.getElementById('addStockInput');
+  hideDropdown();
+  input.value = '';
+  if (portfolioSymbols.indexOf(sym) !== -1) {
+    selectStock(sym);
+    return;
+  }
+  input.disabled = true;
+  input.placeholder = 'Adding ' + sym + '...';
+  try {
+    var data = await fetchStock(sym);
+    if (!data || !data.price) {
+      log('Invalid symbol: ' + sym);
+      input.placeholder = 'Failed to add ' + sym;
+      setTimeout(function() { input.placeholder = 'Search company or ticker...'; }, 2000);
+      input.disabled = false;
+      return;
+    }
+    portfolioSymbols.push(sym);
+    savePortfolio(portfolioSymbols);
+    STOCKS.push({ symbol: sym, name: data.name || sym, pe: null, mktCap: null, divYield: null, eps: null, sector: null });
+    allStockData.push(data);
+    selectedSymbol = sym;
+    selectedRange = '1d';
+    rangeChartData = {};
+    renderUI();
+  } catch(e) {
+    log('Add stock failed: ' + e.message);
+    input.placeholder = 'Error, try again';
+    setTimeout(function() { input.placeholder = 'Search company or ticker...'; }, 2000);
+  }
+  input.disabled = false;
+  input.placeholder = 'Search company or ticker...';
+}
+
+function removeStock(sym, event) {
+  event.stopPropagation();
+  if (portfolioSymbols.length <= 1) return; // Keep at least one
+  portfolioSymbols = portfolioSymbols.filter(function(s) { return s !== sym; });
+  savePortfolio(portfolioSymbols);
+  STOCKS = STOCKS.filter(function(s) { return s.symbol !== sym; });
+  allStockData = allStockData.filter(function(s) { return s.symbol !== sym; });
+  if (selectedSymbol === sym) {
+    selectedSymbol = portfolioSymbols[0];
+    selectedRange = '1d';
+    rangeChartData = {};
+  }
+  renderUI();
+}
+
+var RANGES = [
+  { label: '1D', range: '1d', interval: '5m' },
+  { label: '5D', range: '5d', interval: '15m' },
+  { label: '1M', range: '1mo', interval: '1h' },
+  { label: '6M', range: '6mo', interval: '1d' },
+  { label: 'YTD', range: 'ytd', interval: '1d' },
+  { label: '1Y', range: '1y', interval: '1d' },
+  { label: '5Y', range: '5y', interval: '1wk' }
+];
+
+var allStockData = [];
+var selectedSymbol = 'AAPL';
+var selectedRange = '1d';
+var rangeChartData = {};
+
+var debugLog = [];
+function log(msg) {
+  debugLog.push(new Date().toLocaleTimeString() + ': ' + msg);
+  console.log('[StockTicker] ' + msg);
+  var el = document.getElementById('debug');
+  if (el) el.textContent = debugLog.slice(-20).join('\n');
+}
+
+function formatPrice(p) { return '$' + Number(p).toFixed(2); }
+function formatVolume(v) {
+  if (!v) return 'N/A';
+  if (v >= 1e9) return (v/1e9).toFixed(1) + 'B';
+  if (v >= 1e6) return (v/1e6).toFixed(1) + 'M';
+  if (v >= 1e3) return (v/1e3).toFixed(1) + 'K';
+  return String(v);
+}
+function formatMarketCap(v) {
+  if (!v) return 'N/A';
+  if (v >= 1e12) return '$' + (v/1e12).toFixed(2) + 'T';
+  if (v >= 1e9) return '$' + (v/1e9).toFixed(1) + 'B';
+  if (v >= 1e6) return '$' + (v/1e6).toFixed(1) + 'M';
+  return '$' + v;
+}
+
+function formatTimeLabel(ts, rangeKey) {
+  var d = new Date(ts * 1000);
+  if (rangeKey === '1d') return d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
+  if (rangeKey === '5d') return d.toLocaleDateString('en-US', { weekday: 'short' });
+  if (rangeKey === '1mo') return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  return d.toLocaleDateString('en-US', { month: 'short', year: '2-digit' });
+}
+
+function drawChart(canvas, data, timestamps, isPositive, prevClose, rangeKey) {
+  var ctx = canvas.getContext('2d');
+  var dpr = window.devicePixelRatio || 2;
+  var rect = canvas.getBoundingClientRect();
+  canvas.width = rect.width * dpr;
+  canvas.height = rect.height * dpr;
+  ctx.scale(dpr, dpr);
+  var cw = rect.width, ch = rect.height;
+
+  var pairs = [];
+  for (var i = 0; i < data.length; i++) {
+    if (data[i] !== null && data[i] !== undefined) {
+      pairs.push({ val: data[i], ts: timestamps && timestamps[i] ? timestamps[i] : null });
+    }
+  }
+  if (pairs.length < 2) return;
+
+  var values = pairs.map(function(p) { return p.val; });
+  var allVals = values.slice();
+  if (prevClose && rangeKey === '1d') allVals.push(prevClose);
+  var min = Math.min.apply(null, allVals);
+  var max = Math.max.apply(null, allVals);
+  var range = max - min || 1;
+  var padX = 40, padTop = 12, padBot = 22;
+  var chartH = ch - padTop - padBot;
+
+  // Previous close dashed line (1D only)
+  if (prevClose && rangeKey === '1d') {
+    var prevY = padTop + (1 - (prevClose - min) / range) * chartH;
+    ctx.beginPath();
+    ctx.setLineDash([4, 4]);
+    ctx.moveTo(0, prevY);
+    ctx.lineTo(cw, prevY);
+    ctx.strokeStyle = getComputedStyle(document.body).getPropertyValue('--prev-line').trim() || 'rgba(128,128,128,0.3)';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.font = '10px -apple-system, sans-serif';
+    ctx.fillStyle = getComputedStyle(document.body).getPropertyValue('--subtext').trim() || '#888';
+    ctx.textAlign = 'right';
+    ctx.fillText('Prev ' + formatPrice(prevClose), cw - 4, prevY - 6);
+  }
+
+  var points = [];
+  for (var i = 0; i < pairs.length; i++) {
+    points.push({
+      x: padX + (i / (pairs.length - 1)) * (cw - padX * 2),
+      y: padTop + (1 - (pairs[i].val - min) / range) * chartH,
+      ts: pairs[i].ts
+    });
+  }
+
+  // Gradient fill
+  var gradient = ctx.createLinearGradient(0, 0, 0, ch);
+  var clr = isPositive ? '0, 200, 83' : '255, 82, 82';
+  gradient.addColorStop(0, 'rgba(' + clr + ', 0.12)');
+  gradient.addColorStop(1, 'rgba(' + clr + ', 0)');
+  ctx.beginPath();
+  ctx.moveTo(points[0].x, padTop + chartH);
+  for (var i = 0; i < points.length; i++) ctx.lineTo(points[i].x, points[i].y);
+  ctx.lineTo(points[points.length-1].x, padTop + chartH);
+  ctx.fillStyle = gradient;
+  ctx.fill();
+
+  // Line
+  ctx.beginPath();
+  ctx.moveTo(points[0].x, points[0].y);
+  for (var i = 1; i < points.length; i++) ctx.lineTo(points[i].x, points[i].y);
+  ctx.strokeStyle = isPositive ? '#00c853' : '#ff5252';
+  ctx.lineWidth = 2;
+  ctx.stroke();
+
+  // Current price dot
+  var last = points[points.length - 1];
+  ctx.beginPath();
+  ctx.arc(last.x, last.y, 4, 0, Math.PI * 2);
+  ctx.fillStyle = isPositive ? '#00c853' : '#ff5252';
+  ctx.fill();
+
+  // Time axis labels
+  var axisColor = getComputedStyle(document.body).getPropertyValue('--axis-color').trim() || '#999';
+  ctx.font = '10px -apple-system, sans-serif';
+  ctx.fillStyle = axisColor;
+  var labelCount = rangeKey === '1d' ? 6 : 5;
+  var step = Math.floor(points.length / labelCount);
+  if (step < 1) step = 1;
+  var lastDrawnX = -100;
+  for (var i = 0; i < points.length; i += step) {
+    if (points[i].ts) {
+      var lbl = formatTimeLabel(points[i].ts, rangeKey);
+      var lblW = ctx.measureText(lbl).width;
+      var drawX = Math.max(lblW / 2 + 2, Math.min(points[i].x, cw - lblW / 2 - 2));
+      if (drawX - lastDrawnX < lblW + 8) continue;
+      ctx.textAlign = 'center';
+      ctx.fillText(lbl, drawX, ch - 4);
+      lastDrawnX = drawX;
+    }
+  }
+  // Last label if room
+  if (points[points.length-1].ts) {
+    var lastLbl = formatTimeLabel(points[points.length-1].ts, rangeKey);
+    var lastLblW = ctx.measureText(lastLbl).width;
+    var lastX = cw - lastLblW / 2 - 2;
+    if (lastX - lastDrawnX >= lastLblW + 8) {
+      ctx.textAlign = 'right';
+      ctx.fillText(lastLbl, cw - 2, ch - 4);
+    }
+  }
+}
+
+async function fetchYahoo(symbol, rangeKey, interval) {
+  rangeKey = rangeKey || '1d';
+  interval = interval || '5m';
+  var url = 'https://query1.finance.yahoo.com/v8/finance/chart/' + symbol + '?range=' + rangeKey + '&interval=' + interval + '&includePrePost=false';
+  log('Fetching Yahoo: ' + symbol + ' range=' + rangeKey);
+  var resp = await fetch(url);
+  if (!resp.ok) throw new Error('HTTP ' + resp.status);
+  var json = await resp.json();
+  var result = json.chart.result[0];
+  var meta = result.meta;
+  var quotes = result.indicators.quote[0];
+  var timestamps = result.timestamp || [];
+  var closes = quotes.close || [];
+  return {
+    symbol: symbol,
+    name: meta.shortName || meta.longName || symbol,
+    price: meta.regularMarketPrice,
+    prevClose: meta.chartPreviousClose || meta.previousClose,
+    high: meta.regularMarketDayHigh || meta.regularMarketPrice,
+    low: meta.regularMarketDayLow || meta.regularMarketPrice,
+    volume: meta.regularMarketVolume || 0,
+    fiftyTwoWeekHigh: meta.fiftyTwoWeekHigh || null,
+    fiftyTwoWeekLow: meta.fiftyTwoWeekLow || null,
+    sparkData: closes,
+    timestamps: timestamps,
+    open: meta.regularMarketOpen || null,
+    exchange: meta.exchangeName || null,
+    currency: meta.currency || 'USD',
+    marketState: meta.marketState || (timestamps.length > 0 ? 'REGULAR' : 'CLOSED')
+  };
+}
+
+
+
+async function fetchFinnhub(symbol) {
+  var url = 'https://finnhub.io/api/v1/quote?symbol=' + symbol + '&token=demo';
+  var resp = await fetch(url);
+  if (!resp.ok) throw new Error('HTTP ' + resp.status);
+  var data = await resp.json();
+  return {
+    symbol: symbol,
+    price: data.c,
+    prevClose: data.pc,
+    high: data.h,
+    low: data.l,
+    volume: 0,
+    fiftyTwoWeekHigh: null,
+    fiftyTwoWeekLow: null,
+    sparkData: null,
+    timestamps: null,
+    marketState: 'UNKNOWN'
+  };
+}
+
+async function fetchStock(symbol) {
+  var data = null;
+  try { data = await fetchYahoo(symbol); }
+  catch(e) { log('Yahoo failed for ' + symbol + ': ' + e.message); }
+  if (!data) {
+    try { data = await fetchFinnhub(symbol); }
+    catch(e2) { log('Finnhub failed for ' + symbol + ': ' + e2.message); }
+  }
+
+  return data;
+}
+
+async function fetchRangeData(symbol, rangeKey) {
+  var r = RANGES.find(function(x) { return x.range === rangeKey; });
+  if (!r) return null;
+  try {
+    var data = await fetchYahoo(symbol, r.range, r.interval);
+    return { sparkData: data.sparkData, timestamps: data.timestamps, prevClose: data.prevClose };
+  } catch(e) {
+    log('Range fetch failed: ' + e.message);
+    return null;
+  }
+}
+
+function selectStock(symbol) {
+  selectedSymbol = symbol;
+  selectedRange = '1d';
+  rangeChartData = {};
+  renderUI();
+}
+
+async function selectRange(rangeKey) {
+  selectedRange = rangeKey;
+  if (rangeKey === '1d') {
+    renderDetail();
+    return;
+  }
+  var cacheKey = selectedSymbol + ':' + rangeKey;
+  if (rangeChartData[cacheKey]) {
+    renderDetail();
+    return;
+  }
+  var data = await fetchRangeData(selectedSymbol, rangeKey);
+  if (data) {
+    rangeChartData[cacheKey] = data;
+  }
+  renderDetail();
+}
+
+function renderUI() {
+  if (!allStockData.length) return;
+  renderChips();
+  renderDetail();
+}
+
+function renderChips() {
+  var container = document.getElementById('chips');
+  var html = '';
+  allStockData.forEach(function(stock) {
+    var prevClose = stock.prevClose || stock.price;
+    var change = stock.price - prevClose;
+    var changePct = prevClose ? (change / prevClose * 100) : 0;
+    var isPos = change >= 0;
+    var active = stock.symbol === selectedSymbol ? ' active' : '';
+    html += '<div class="chip' + active + '" onclick="selectStock(\'' + stock.symbol + '\')">' +
+      '<span>' + stock.symbol + '</span>' +
+      '<span class="chip-change ' + (isPos ? 'up' : 'down') + '">' + (isPos ? '▲' : '▼') + ' ' + (isPos ? '+' : '') + changePct.toFixed(1) + '%</span>' +
+      '<span class="remove-btn" onclick="removeStock(\'' + stock.symbol + '\', event)">&times;</span>' +
+    '</div>';
+  });
+  container.innerHTML = html;
+}
+
+function renderDetail() {
+  var stock = allStockData.find(function(s) { return s.symbol === selectedSymbol; });
+  if (!stock) return;
+  var info = STOCKS.find(function(s) { return s.symbol === stock.symbol; }) || { symbol: stock.symbol, name: stock.symbol };
+  var dayPrevClose = stock.prevClose || stock.price;
+
+  // Determine chart data based on selected range
+  var chartData, chartTimestamps, chartPrevClose;
+  var cacheKey = selectedSymbol + ':' + selectedRange;
+  if (selectedRange !== '1d' && rangeChartData[cacheKey]) {
+    chartData = rangeChartData[cacheKey].sparkData;
+    chartTimestamps = rangeChartData[cacheKey].timestamps;
+    chartPrevClose = rangeChartData[cacheKey].prevClose;
+  } else {
+    chartData = stock.sparkData;
+    chartTimestamps = stock.timestamps;
+    chartPrevClose = dayPrevClose;
+  }
+
+  // Compute change based on selected range
+  var filteredForChange = chartData ? chartData.filter(function(c) { return c !== null; }) : [];
+  var rangeStartPrice, change, changePct;
+  if (selectedRange === '1d') {
+    rangeStartPrice = dayPrevClose;
+  } else if (filteredForChange.length > 0) {
+    rangeStartPrice = filteredForChange[0];
+  } else {
+    rangeStartPrice = dayPrevClose;
+  }
+  change = stock.price - rangeStartPrice;
+  changePct = rangeStartPrice ? (change / rangeStartPrice * 100) : 0;
+  var isPos = change >= 0;
+  var sign = isPos ? '+' : '';
+
+  var now = new Date();
+  var dateStr = now.toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric' }) + ', ' +
+    now.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true }) + ' EST';
+
+  // Range buttons
+  var rangeHtml = '';
+  RANGES.forEach(function(r) {
+    rangeHtml += '<button class="range-btn' + (selectedRange === r.range ? ' active' : '') + '" onclick="selectRange(\'' + r.range + '\')">' + r.label + '</button>';
+  });
+
+  // Sidebar stats
+
+
+  var container = document.getElementById('detail');
+  container.innerHTML = '<div class="detail-layout">' +
+    '<div class="detail-main"><div class="detail">' +
+      '<div class="detail-name">' + (stock.name || info.name || stock.symbol) + ' · ' + stock.symbol + '</div>' +
+      '<div class="detail-price-row">' +
+        '<div class="detail-price">' + formatPrice(stock.price) + '</div>' +
+        '<div class="detail-change ' + (isPos ? 'positive' : 'negative') + '">' +
+          (isPos ? '▲' : '▼') + ' ' + sign + Math.abs(change).toFixed(2) + ' (' + sign + changePct.toFixed(2) + '%)</div>' +
+      '</div>' +
+      '<div class="detail-date">' + dateStr + '</div>' +
+      '<div class="range-selector">' + rangeHtml + '</div>' +
+      '<div class="detail-chart"><canvas id="detail-canvas" style="width:100%;height:100%"></canvas></div>' +
+    '</div></div>' +
+    '<div class="detail-sidebar">' +
+      '<div class="sidebar-title">Market Data</div>' +
+      '<table class="sidebar-table">' +
+        '<tr><td>Prev Close</td><td>' + formatPrice(dayPrevClose) + '</td></tr>' +
+        '<tr><td>Open</td><td>' + formatPrice(stock.open || stock.price) + '</td></tr>' +
+        '<tr><td>Day High</td><td>' + formatPrice(stock.high || stock.price) + '</td></tr>' +
+        '<tr><td>Day Low</td><td>' + formatPrice(stock.low || stock.price) + '</td></tr>' +
+        '<tr><td>Volume</td><td>' + formatVolume(stock.volume) + '</td></tr>' +
+      '</table>' +
+      '<div class="sidebar-title" style="margin-top:12px">Range</div>' +
+      '<table class="sidebar-table">' +
+        '<tr><td>52W High</td><td>' + (stock.fiftyTwoWeekHigh ? formatPrice(stock.fiftyTwoWeekHigh) : 'N/A') + '</td></tr>' +
+        '<tr><td>52W Low</td><td>' + (stock.fiftyTwoWeekLow ? formatPrice(stock.fiftyTwoWeekLow) : 'N/A') + '</td></tr>' +
+        '<tr><td>Exchange</td><td>' + (stock.exchange || 'N/A') + '</td></tr>' +
+        '<tr><td>Currency</td><td>' + (stock.currency || 'USD') + '</td></tr>' +
+      '</table>' +
+    '</div>' +
+  '</div>';
+
+  requestAnimationFrame(function() {
+    var canvas = document.getElementById('detail-canvas');
+    if (canvas) {
+      var filtered = chartData ? chartData.filter(function(c) { return c !== null; }) : [];
+      var filteredTs = [];
+      if (chartData && chartTimestamps) {
+        for (var i = 0; i < chartData.length; i++) {
+          if (chartData[i] !== null) filteredTs.push(chartTimestamps[i]);
+        }
+      }
+      var chartIsPos = filtered.length > 1 ? filtered[filtered.length-1] >= filtered[0] : isPos;
+      drawChart(canvas, filtered, filteredTs, chartIsPos, chartPrevClose, selectedRange);
+    }
+  });
+}
+
+async function fetchAllStocks() {
+  var statusEl = document.getElementById('status');
+  log('Starting fetch for ' + STOCKS.length + ' stocks');
+  var promises = STOCKS.map(function(s) { return fetchStock(s.symbol); });
+  var results = await Promise.all(promises);
+  var valid = results.filter(function(r) { return r !== null; });
+
+  if (valid.length === 0) {
+    statusEl.innerHTML = '<span class="status-dot error"></span>All fetches failed';
+    document.getElementById('debug').classList.add('show');
+    return;
+  }
+
+  document.getElementById('debug').classList.remove('show');
+  log('Got ' + valid.length + '/' + STOCKS.length + ' results');
+    var m = valid[0].rawMeta;
+
+    // Test v7 finance quote for fundamentals
+    
+    
+  var now = new Date();
+  var marketState = valid[0].marketState || '';
+  var isOpen = marketState === 'REGULAR';
+  statusEl.innerHTML = '<span class="status-dot ' + (isOpen ? 'live' : 'closed') + '"></span>' +
+    (isOpen ? 'Market Open' : (marketState === 'PRE' ? 'Pre-Market' : marketState === 'POST' ? 'After Hours' : 'Market Closed')) +
+    ' · ' + valid.length + '/' + STOCKS.length + ' loaded · ' + now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+
+  allStockData = valid;
+  rangeChartData = {};
+  renderUI();
+}
+
+document.addEventListener('click', function(e) {
+  if (!e.target.closest('.add-stock-bar')) hideDropdown();
+});
+
+function renderPlaceholder() {
+  var container = document.getElementById('detail');
+  container.innerHTML = '<div class="detail-layout">' +
+    '<div class="detail-main"><div class="detail" style="opacity:0.4;pointer-events:none">' +
+      '<div class="detail-name">Company Name · TICK</div>' +
+      '<div class="detail-price-row">' +
+        '<div class="detail-price">$0.00</div>' +
+        '<div class="detail-change" style="color:var(--subtext);background:var(--hover-bg)">— $0.00 (0.00%)</div>' +
+      '</div>' +
+      '<div class="detail-date">&nbsp;</div>' +
+      '<div class="range-selector">' + RANGES.map(function(r){ return '<button class="range-btn">' + r.label + '</button>'; }).join('') + '</div>' +
+      '<div class="detail-chart" style="display:flex;align-items:center;justify-content:center;min-height:180px">' +
+        '<div style="text-align:center;color:var(--subtext);font-size:13px;font-weight:500;opacity:1">' +
+          '<div style="font-size:28px;margin-bottom:6px">📈</div>' +
+          'Select a stock above to view details' +
+        '</div>' +
+      '</div>' +
+    '</div></div>' +
+    '<div class="detail-sidebar" style="opacity:0.4;pointer-events:none">' +
+      '<div class="sidebar-title">Market Data</div>' +
+      '<table class="sidebar-table">' +
+        '<tr><td>Prev Close</td><td>—</td></tr>' +
+        '<tr><td>Open</td><td>—</td></tr>' +
+        '<tr><td>Day High</td><td>—</td></tr>' +
+        '<tr><td>Day Low</td><td>—</td></tr>' +
+        '<tr><td>Volume</td><td>—</td></tr>' +
+      '</table>' +
+    '</div>' +
+  '</div>';
+}
+
+// --- NotePlan Theme Integration ---
+function hexToRgb(hex) {
+  hex = hex.replace(/^#/, '');
+  if (hex.length === 8) hex = hex.slice(2); // strip alpha prefix like #FF112233 -> 112233
+  if (hex.length === 3) hex = hex[0]+hex[0]+hex[1]+hex[1]+hex[2]+hex[2];
+  var n = parseInt(hex, 16);
+  return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 };
+}
+
+function blendColor(hex1, hex2, t) {
+  var c1 = hexToRgb(hex1), c2 = hexToRgb(hex2);
+  var r = Math.round(c1.r + (c2.r - c1.r) * t);
+  var g = Math.round(c1.g + (c2.g - c1.g) * t);
+  var b = Math.round(c1.b + (c2.b - c1.b) * t);
+  return '#' + ((1<<24)+(r<<16)+(g<<8)+b).toString(16).slice(1);
+}
+
+async function applyNotePlanTheme() {
+  try {
+    if (typeof Editor === 'undefined') return false;
+    var theme = await Editor.currentTheme;
+    if (!theme) return false;
+    var values = theme.values || theme;
+    var ed = values.editor;
+    if (!ed || !ed.backgroundColor || !ed.textColor) return false;
+
+    var isDark = (values.style === 'Dark') || (theme.mode === 'dark');
+    var bg = ed.backgroundColor;
+    var text = ed.textColor;
+    var altBg = ed.altBackgroundColor || blendColor(bg, isDark ? '#ffffff' : '#000000', 0.05);
+    var tint = ed.tintColor || (isDark ? '#00c853' : '#2d8a4e');
+    var rgb = hexToRgb(text);
+
+    // Derive all CSS variables from theme
+    var cardBg = altBg;
+    var cardBorder = blendColor(bg, isDark ? '#ffffff' : '#000000', isDark ? 0.12 : 0.08);
+    var subtext = blendColor(text, bg, 0.45);
+    var headerBg = blendColor(bg, isDark ? '#000000' : '#ffffff', isDark ? 0.25 : 0.08);
+    var hoverBg = blendColor(bg, isDark ? '#ffffff' : '#000000', 0.06);
+    var positive = isDark ? '#00c853' : '#2d8a4e';
+    var negative = isDark ? '#ff5252' : '#b71c1c';
+    var posRgb = hexToRgb(positive);
+    var negRgb = hexToRgb(negative);
+
+    var vars = {
+      'background': bg,
+      'color': text,
+      '--card-bg': cardBg,
+      '--card-border': cardBorder,
+      '--subtext': subtext,
+      '--positive': positive,
+      '--negative': negative,
+      '--header-bg': headerBg,
+      '--pos-bg': 'rgba(' + posRgb.r + ',' + posRgb.g + ',' + posRgb.b + ',0.08)',
+      '--neg-bg': 'rgba(' + negRgb.r + ',' + negRgb.g + ',' + negRgb.b + ',0.08)',
+      '--chip-active': text,
+      '--chip-active-text': bg,
+      '--chip-bg': cardBg,
+      '--hover-bg': hoverBg,
+      '--prev-line': 'rgba(' + rgb.r + ',' + rgb.g + ',' + rgb.b + ',0.2)',
+      '--axis-color': subtext,
+      '--table-alt': 'rgba(' + rgb.r + ',' + rgb.g + ',' + rgb.b + ',0.03)',
+      '--range-active-bg': text,
+      '--range-active-text': bg
+    };
+
+    var body = document.body;
+    for (var key in vars) {
+      if (key === 'background' || key === 'color') {
+        body.style[key] = vars[key];
+      } else {
+        body.style.setProperty(key, vars[key]);
+      }
+    }
+    log('Applied NotePlan theme: ' + (values.name || theme.name || 'unknown') + ' (' + (isDark ? 'dark' : 'light') + ')');
+    return true;
+  } catch(e) {
+    log('Theme API not available, using fallback: ' + e.message);
+    return false;
+  }
+}
+
+applyNotePlanTheme();
+
+renderPlaceholder();
+fetchAllStocks();
+setInterval(fetchAllStocks, 120000);
